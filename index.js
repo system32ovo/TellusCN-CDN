@@ -73,6 +73,9 @@ const DATA_SOURCES = {
   'overpass': {
     target: 'https://overpass-api.de/api',
     cacheTtl: 3600, // 1小时缓存
+    headers: {
+      'User-Agent': 'TellusCN-Deno/1.0 (Minecraft Mod Data Proxy)',
+    },
   },
   
   // Land Mask
@@ -213,6 +216,20 @@ Deno.serve(async (request) => {
       // 对于 Overture Maps 等单文件数据源，直接使用 target 作为完整 URL
       // 忽略请求路径，因为 Java 端会直接使用返回的 URL
       targetUrl = sourceConfig.target + url.search;
+      
+      // 对于大文件（如 Overture Maps PMTiles），直接返回 302 重定向
+      // 避免 Deno Deploy 内存和超时限制
+      if (!rangeHeader) {
+        return new Response(null, {
+          status: 302,
+          headers: {
+            'Location': targetUrl,
+            'X-Proxy-By': 'TellusCN-Deno-Deploy',
+            'X-Redirect-Reason': 'Large file - direct download',
+            ...CORS_HEADERS,
+          },
+        });
+      }
     } else {
       // 正常情况：target + 请求路径
       // 计算路径偏移量（多级路由如 overture/roads 需要跳过两个部分）
