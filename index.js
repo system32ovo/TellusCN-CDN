@@ -246,8 +246,11 @@ Deno.serve(async (request) => {
     const cache = await caches.open('telluscn-cache');
     
     // 创建缓存键（包含 Range 头，确保不同范围请求有独立缓存）
-    const cacheKeyUrl = targetUrl + (rangeHeader ? `#range=${rangeHeader}` : '');
-    const cacheKey = new Request(cacheKeyUrl, request);
+    // 使用简化版的缓存键 URL，避免 URL 过长
+    const cacheKeyUrl = rangeHeader 
+      ? `${targetUrl}#range=${rangeHeader.replace(/[^0-9-]/g, '')}`
+      : targetUrl;
+    const cacheKey = new Request(cacheKeyUrl, { method: request.method });
     
     // 尝试从缓存获取
     let response = await cache.match(cacheKey);
@@ -264,10 +267,7 @@ Deno.serve(async (request) => {
       return addCorsHeaders(cachedResponse);
     }
     
-    // 从源站获取 - 使用 AbortController 设置 12 秒超时
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 12000);
-    
+    // 从源站获取 - 使用 Promise.race 设置 12 秒超时
     const fetchOptions = {
       method: request.method,
       headers: {
@@ -275,7 +275,6 @@ Deno.serve(async (request) => {
         'Accept': request.headers.get('Accept') || '*/*',
         'Accept-Encoding': 'gzip, deflate, br',
       },
-      signal: controller.signal,
     };
     
     // 应用数据源自定义 headers（如 tiles 的 User-Agent）
@@ -290,12 +289,16 @@ Deno.serve(async (request) => {
       fetchOptions.headers['Range'] = rangeHeader;
     }
     
-    // 发送请求到源站
+    // 发送请求到源站，带 12 秒超时
+    const fetchPromise = fetch(targetUrl, fetchOptions);
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('FETCH_TIMEOUT')), 12000);
+    });
+    
     try {
-      response = await fetch(targetUrl, fetchOptions);
+      response = await Promise.race([fetchPromise, timeoutPromise]);
     } catch (error) {
-      clearTimeout(timeoutId);
-      if (error.name === 'AbortError') {
+      if (error.message === 'FETCH_TIMEOUT') {
         console.error(`Fetch timeout: ${targetUrl}`);
         return new Response('Gateway Timeout: Source took too long', {
           status: 504,
@@ -304,7 +307,6 @@ Deno.serve(async (request) => {
       }
       throw error;
     }
-    clearTimeout(timeoutId);
     
     // 如果源站返回错误，直接返回
     if (!response.ok && response.status !== 206) { // 206 是 Partial Content
