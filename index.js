@@ -317,25 +317,38 @@ Deno.serve(async (request) => {
       });
     }
     
-    // 创建可缓存的响应
-    const responseToCache = new Response(response.body, {
+    // 创建响应头（移除 Deno Deploy 缓存不允许的头）
+    const responseHeaders = new Headers();
+    response.headers.forEach((value, key) => {
+      // Deno Deploy 缓存不允许这些头
+      if (key.toLowerCase() !== 'content-encoding' && 
+          key.toLowerCase() !== 'content-length') {
+        responseHeaders.set(key, value);
+      }
+    });
+    responseHeaders.set('X-Cache', 'MISS');
+    responseHeaders.set('X-Cache-Source', sourceKey);
+    responseHeaders.set('X-Proxy-By', 'TellusCN-Deno-Deploy');
+    responseHeaders.set('Cache-Control', `public, max-age=${sourceConfig.cacheTtl}`);
+    
+    // 创建响应
+    const responseToReturn = new Response(response.body, {
       status: response.status,
       statusText: response.statusText,
-      headers: {
-        ...Object.fromEntries(response.headers),
-        'X-Cache': 'MISS',
-        'X-Cache-Source': sourceKey,
-        'X-Proxy-By': 'TellusCN-Deno-Deploy',
-      },
+      headers: responseHeaders,
     });
     
-    // 设置缓存控制头
-    responseToCache.headers.set('Cache-Control', `public, max-age=${sourceConfig.cacheTtl}`);
+    // 只有非 206 响应才缓存（Deno Deploy 缓存不支持 206）
+    if (response.status !== 206) {
+      try {
+        await cache.put(cacheKey, responseToReturn.clone());
+      } catch (cacheError) {
+        console.error(`Cache put error: ${cacheError.message}`);
+        // 缓存失败不影响主流程
+      }
+    }
     
-    // 存入 Deno Deploy 缓存
-    await cache.put(cacheKey, responseToCache.clone());
-    
-    return addCorsHeaders(responseToCache);
+    return addCorsHeaders(responseToReturn);
     
   } catch (error) {
     console.error('Deno Deploy error:', error);
