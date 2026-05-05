@@ -220,15 +220,19 @@ Deno.serve(async (request) => {
       // 对于大文件（如 Overture Maps PMTiles），直接返回 302 重定向
       // 避免 Deno Deploy 内存和超时限制
       if (!rangeHeader) {
-        return new Response(null, {
+        console.log(`Redirecting to: ${targetUrl}`);
+        const redirectResponse = new Response(null, {
           status: 302,
+          statusText: 'Found',
           headers: {
             'Location': targetUrl,
             'X-Proxy-By': 'TellusCN-Deno-Deploy',
             'X-Redirect-Reason': 'Large file - direct download',
+            'Content-Length': '0',
             ...CORS_HEADERS,
           },
         });
+        return redirectResponse;
       }
     } else {
       // 正常情况：target + 请求路径
@@ -260,7 +264,10 @@ Deno.serve(async (request) => {
       return addCorsHeaders(cachedResponse);
     }
     
-    // 从源站获取
+    // 从源站获取 - 使用 AbortController 设置 12 秒超时
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 12000);
+    
     const fetchOptions = {
       method: request.method,
       headers: {
@@ -268,6 +275,7 @@ Deno.serve(async (request) => {
         'Accept': request.headers.get('Accept') || '*/*',
         'Accept-Encoding': 'gzip, deflate, br',
       },
+      signal: controller.signal,
     };
     
     // 应用数据源自定义 headers（如 tiles 的 User-Agent）
@@ -283,7 +291,20 @@ Deno.serve(async (request) => {
     }
     
     // 发送请求到源站
-    response = await fetch(targetUrl, fetchOptions);
+    try {
+      response = await fetch(targetUrl, fetchOptions);
+    } catch (error) {
+      clearTimeout(timeoutId);
+      if (error.name === 'AbortError') {
+        console.error(`Fetch timeout: ${targetUrl}`);
+        return new Response('Gateway Timeout: Source took too long', {
+          status: 504,
+          headers: CORS_HEADERS,
+        });
+      }
+      throw error;
+    }
+    clearTimeout(timeoutId);
     
     // 如果源站返回错误，直接返回
     if (!response.ok && response.status !== 206) { // 206 是 Partial Content
