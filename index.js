@@ -1,5 +1,5 @@
 /**
- * TellusCN Cloudflare Workers 反代服务
+ * TellusCN Deno Workers 反代服务
  * 
  * 为 Tellus Minecraft Mod 提供国内加速的数据源代理
  * 支持高程数据、地表覆盖、天气、地理编码等所有数据源
@@ -161,7 +161,7 @@ export default {
       if (path === '/health' || path === '/') {
         return new Response(JSON.stringify({
           status: 'ok',
-          service: 'TellusCN Cloudflare Workers',
+          service: 'TellusCN Deno Workers',
           version: '1.0.0',
           timestamp: new Date().toISOString(),
           sources: Object.keys(DATA_SOURCES),
